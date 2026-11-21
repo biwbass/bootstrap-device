@@ -1,0 +1,6 @@
+---
+# The name this node registers under. Node names are sticky (the Pis had to be
+# re-joined once over a mismatch), so roles/k8s_worker refuses to join unless
+# the VM's hostname already equals this. Rename the VM first:
+#   qm set 201 --name gpu.k8s.internal, then reboot
+k8s_node_name: gpu.k8s.internal

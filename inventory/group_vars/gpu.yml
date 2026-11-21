@@ -1,0 +1,15 @@
+---
+# GPU workers (see the `gpu` group in inventory/hosts.yml).
+#
+# Applied by the kubelet itself when it first registers the Node, via
+# --register-with-taints in /etc/default/kubelet. That is written by
+# roles/k8s_worker BEFORE kubeadm join, so the node is never schedulable
+# untainted, not even for a moment. Tainting with kubectl after the join
+# leaves a window where any pod can be scheduled there, including arm64-only
+# images, which die with `exec format error` on this amd64 node.
+#
+# Registration-time only: the kubelet does not re-apply or remove these on an
+# existing Node. Changing this list later means `kubectl taint` by hand (or
+# deleting and re-joining the node).
+kubelet_register_taints:
+  - dedicated=gpu:NoSchedule

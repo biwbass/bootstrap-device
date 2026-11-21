@@ -30,6 +30,13 @@
       become_method: ansible.builtin.sudo
       ansible.builtin.apt:
         name: git
+
+# Pi-only. A remote desktop and a polkit rule for colord have no place on a
+# minimal GPU server, so this is not part of the `workers` play above.
+- name: Remote desktop setup (Raspberry Pi workers)
+  hosts: raspberry_pi
+
+  tasks:
     - name: Setup xRDP
       block:
         - name: Install xRDP
