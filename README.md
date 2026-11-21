@@ -392,7 +392,7 @@ What to use instead:
 
 - **Model weights and caches** go on the VM's own disk, through a `hostPath`
   or a local-path StorageClass. Shutting the VM down keeps that disk; only a
-  `qm rollback` wipes it, which is fine for a cache. The disk is 64 GB today,
+  `qm rollback` wipes it, which is fine for a cache. The root filesystem is 61 GB today,
   so grow it, or add a second disk for models, when the VM is sized for
   inference.
 - **Data that matters** (results, fine-tunes) goes to something that stays
