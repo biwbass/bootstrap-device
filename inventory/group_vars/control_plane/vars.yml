@@ -24,11 +24,18 @@ argocd_version: "v3.5.1"
 
 # App-of-apps entry point that hands the rest of the cluster to GitOps —
 # see https://github.com/biwbass/homelab-infra's root-app.yaml.
-# Argo CD clones this over SSH with a read-only deploy key (see
-# inventory/vault/argocd_repo_key.yml), NOT anonymously over https -- that only
-# works while the repository is public.
-homelab_infra_repo_url: "git@github.com:biwbass/homelab-infra"
-argocd_repo_secret_name: homelab-infra-repo
+# Argo CD clones this over https, authenticating as a dedicated read-only
+# GitHub App (see inventory/vault/argocd_github_app.yml), NOT anonymously --
+# that only works while the repository is public. Must match the repoURL in
+# homelab-infra's root-app.yaml and apps/*/application.yaml.
+homelab_infra_repo_url: "https://github.com/biwbass/homelab-infra"
+
+# One repo-creds Secret covers every repository under this URL prefix, so a
+# second private repo in the org needs only the App installed on it -- no new
+# Secret. The prefix must be a string prefix of each repoURL it is meant to
+# match.
+argocd_repo_creds_url: "https://github.com/biwbass"
+argocd_repo_creds_secret_name: biwbass-github-app-creds
 
 # root-app.yaml is rendered from a local template rather than fetched from
 # raw.githubusercontent.com, so the bootstrap does not depend on the

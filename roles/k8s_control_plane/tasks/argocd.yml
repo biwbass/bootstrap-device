@@ -104,7 +104,26 @@
 # Argo CD needs the repository credential BEFORE root-app is applied. Applied
 # the other way round, root-app lands, immediately fails to clone, and the
 # cluster sits in a broken GitOps state until someone notices.
-- name: Install the Argo CD repository credential for homelab-infra
+# Fail before touching the cluster rather than apply a Secret holding the
+# .example placeholders: Argo CD would accept it and every Application would
+# then fail with an authentication error far from the cause.
+- name: Check the Argo CD GitHub App credential was supplied
+  ansible.builtin.assert:
+    that:
+      - vault_argocd_github_app_id is defined
+      - vault_argocd_github_app_installation_id is defined
+      - vault_argocd_github_app_private_key is defined
+      - (vault_argocd_github_app_id | string) is match('^[0-9]+$')
+      - (vault_argocd_github_app_installation_id | string) is match('^[0-9]+$')
+      - "'REPLACE-WITH' not in vault_argocd_github_app_private_key"
+    fail_msg: >-
+      Argo CD's GitHub App credential is missing or still a placeholder. Pass
+      -e @inventory/vault/argocd_github_app.yml --vault-password-file
+      .vault_pass.txt (see inventory/vault/argocd_github_app.yml.example).
+    quiet: true
+  no_log: true
+
+- name: Install the Argo CD repository credential (GitHub App, repo-creds)
   become: true
   become_method: ansible.builtin.sudo
   ansible.builtin.template:
@@ -125,7 +144,7 @@
   register: k8s_control_plane_repo_secret
   changed_when: k8s_control_plane_repo_secret.stdout is search('created|configured')
 
-# The rendered Secret holds the private key in cleartext; it has served its
+# The rendered Secret holds the App private key in cleartext; it has served its
 # purpose once applied.
 - name: Remove the rendered credential from disk
   become: true
