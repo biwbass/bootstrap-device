@@ -392,9 +392,10 @@ What to use instead:
 
 - **Model weights and caches** go on the VM's own disk, through a `hostPath`
   or a local-path StorageClass. Shutting the VM down keeps that disk; only a
-  `qm rollback` wipes it, which is fine for a cache. The root filesystem is 61 GB today,
-  so grow it, or add a second disk for models, when the VM is sized for
-  inference.
+  `qm rollback` wipes it, which is fine for a cache. The VM has a second
+  500 GB disk (`scsi1`) for this, mounted at `/var/lib/models` by
+  `roles/gpu_node` (ext4, `nofail`), so a full model cache cannot fill `/`
+  under the kubelet and containerd.
 - **Data that matters** (results, fine-tunes) goes to something that stays
   up, reached through a Service or object storage, not a volume mounted on
   this node.
@@ -415,7 +416,64 @@ tolerations:
     value: gpu
     effect: NoSchedule
 nodeSelector:
-  kubernetes.io/arch: amd64
+  node-role.kubernetes.io/gpu: ""
+```
+
+### GPU passthrough and driver
+
+Issue #60. The 3080 Ti is passed through whole, and the driver is installed
+on the VM by Ansible, not by the GPU Operator.
+
+**Proxmox host (done by hand, once).** `pve` boots with GRUB, and IOMMU is on
+by default on this AMD board. The card (`0c:00.0` `10de:2208`) and its audio
+function (`0c:00.1` `10de:1aef`) are alone in IOMMU group 29.
+
+- `/etc/modprobe.d/vfio.conf` binds both to `vfio-pci` (`ids=10de:2208,10de:1aef`,
+  with softdeps ahead of `snd_hda_intel` and `nouveau`). vfio modules are
+  loaded from `/etc/modules`.
+- `GRUB_CMDLINE_LINUX_DEFAULT` adds `iommu=pt initcall_blacklist=sysfb_init`.
+  The 5800X has no iGPU, so this card is the host's only display. The
+  sysfb blacklist stops the firmware framebuffer from holding its BAR, and
+  as a result the host's own screen is blank after GRUB. Manage `pve` over
+  SSH or the web UI.
+- VM 201 was already `machine: q35` and `bios: ovmf` with
+  `pre-enrolled-keys=0` (no Secure Boot), so no firmware change was needed.
+  It now has `hostpci0: 0000:0c:00,pcie=1`, `memory: 49152` (no balloon),
+  `cores: 8` and `scsi1: local-lvm:500`.
+- Passthrough pins all 48 GB of the VM's RAM while it runs. A VM with a
+  `hostpci` device cannot be live-migrated or snapshotted with RAM state.
+  Disk-only snapshots still work.
+
+**In the VM (`roles/gpu_node`, run by `main.yml` on the `gpu` group).**
+
+- Ubuntu's `nvidia-headless-580-server-open` and `nvidia-utils-580-server`,
+  built with DKMS, pinned by `gpu_node_nvidia_version` and held. DKMS rather
+  than Ubuntu's precompiled modules: those follow whatever 580 point release
+  is current, so with the userspace held, a kernel upgrade would leave no
+  matching module.
+- NVIDIA Container Toolkit `1.20.2-1` from NVIDIA's repo, held.
+- **containerd has one writer per file.** `k8s_common` owns
+  `/etc/containerd/config.toml`. The NVIDIA runtime lives in
+  `/etc/containerd/conf.d/99-nvidia.toml`, which containerd 2.x's generated
+  config already imports. The role asserts the import is there instead of
+  editing `config.toml`, and it never runs `nvidia-ctk runtime configure`,
+  because that also edits `config.toml`. `nvidia` is not the default
+  runtime: GPU pods select it with `runtimeClassName: nvidia`.
+- The `node-role.kubernetes.io/gpu=""` label, set through the API from the
+  control plane. NodeRestriction rejects `node-role.*` labels from a kubelet.
+- The `gpu` group has its own `kubelet_reservations` in
+  `inventory/group_vars/gpu.yml`, sized for 48 GB: 2.5 GiB reserved and 1 GiB
+  hard eviction.
+
+**GPU Operator (homelab-infra#93).** Install it with `driver.enabled=false`
+and `toolkit.enabled=false`. The operator's driver container would rebuild
+the driver on every wake (#61), and its toolkit container would edit
+`config.toml`. Its support matrix does not list GeForce cards.
+
+Check from the VM:
+
+```bash
+nvidia-smi
 ```
 
 Bring-up, from a clean snapshot:
