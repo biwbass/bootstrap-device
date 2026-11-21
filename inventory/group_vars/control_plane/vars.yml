@@ -23,11 +23,11 @@ cilium_version: "1.20.1"
 argocd_version: "v3.5.1"
 
 # App-of-apps entry point that hands the rest of the cluster to GitOps —
-# see https://github.com/jordanthomas761/homelab-infra's root-app.yaml.
+# see https://github.com/biwbass/homelab-infra's root-app.yaml.
 # Argo CD clones this over SSH with a read-only deploy key (see
 # inventory/vault/argocd_repo_key.yml), NOT anonymously over https -- that only
 # works while the repository is public.
-homelab_infra_repo_url: "git@github.com:jordanthomas761/homelab-infra"
+homelab_infra_repo_url: "git@github.com:biwbass/homelab-infra"
 argocd_repo_secret_name: homelab-infra-repo
 
 # root-app.yaml is rendered from a local template rather than fetched from
