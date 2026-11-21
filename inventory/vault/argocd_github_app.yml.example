@@ -1,0 +1,25 @@
+---
+# Template for inventory/vault/argocd_github_app.yml. Copy, fill in, then
+# ansible-vault encrypt it -- see the README ("Argo CD Repository Access").
+#
+# The App is dedicated to Argo CD. Its repository permissions are exactly
+#   Contents: Read-only     Metadata: Read-only
+# and nothing else, and it is installed on the biwbass org for SELECTED
+# repositories only (homelab-infra). Do not reuse the ARC App: it holds
+# administration and self-hosted-runner write, which nothing that can read a
+# Secret in the argocd namespace should hold.
+#
+# App ID: the App's settings page ("App ID", a number -- not the Client ID).
+# Installation ID: the number at the end of the URL on
+#   https://github.com/organizations/biwbass/settings/installations
+#   after clicking "Configure" on the App, or:
+#   gh api orgs/biwbass/installations \
+#     --jq '.installations[] | "\(.app_slug) \(.id)"'
+# Private key: "Generate a private key" on the App's settings page downloads a
+#   .pem; paste the whole file below, BEGIN/END lines included.
+vault_argocd_github_app_id: "REPLACE-WITH-APP-ID"
+vault_argocd_github_app_installation_id: "REPLACE-WITH-INSTALLATION-ID"
+vault_argocd_github_app_private_key: |
+  -----BEGIN RSA PRIVATE KEY-----
+  REPLACE-WITH-A-REAL-KEY
+  -----END RSA PRIVATE KEY-----

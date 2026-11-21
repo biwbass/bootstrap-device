@@ -852,35 +852,63 @@ For builds, configure the mirror on buildx instead, per workflow:
 
 ## Argo CD Repository Access
 
-Argo CD clones `homelab-infra` over **SSH with a read-only deploy key**, not
-anonymously over https. That is what allows the repository to be private.
+Argo CD clones `homelab-infra` over **https as a dedicated, read-only GitHub
+App**, not anonymously. That is what allows the repository to be private. It
+replaced an SSH deploy key, which the `biwbass` org can disable wholesale
+(and did, when the repository was transferred in) and which GitHub itself
+recommends against in favour of Apps.
 
-Two things had to change for that, and both are easy to miss:
+The App (`argocd-biwbass`) holds exactly **Contents: read** and **Metadata:
+read**, and is installed on `biwbass` for **selected repositories** only.
+It is deliberately not the ARC App, which holds administration and
+self-hosted-runner write. Argo CD signs a JWT with the App's private key and
+exchanges it for a one-hour installation token on its own, so nothing needs
+rotating by hand.
+
+The credential is a single **`repo-creds`** Secret
+(`biwbass-github-app-creds`) with `url: https://github.com/biwbass`. Argo CD
+matches it by URL **prefix**, so every repoURL under the org uses it and a
+second private repo needs only the App installed on it, not a new Secret.
+
+Things that are easy to miss:
 
 - **The credential cannot live in the repository it unlocks.** Argo CD needs it
   before it can read anything, so it is created here — by
   `roles/k8s_control_plane/tasks/argocd.yml`, from
-  `inventory/vault/argocd_repo_key.yml`, **before** root-app is applied. Applied
-  the other way round, root-app lands, fails to clone, and the cluster sits in a
-  broken GitOps state.
+  `inventory/vault/argocd_github_app.yml`, **before** root-app is applied.
+  Applied the other way round, root-app lands, fails to clone, and the cluster
+  sits in a broken GitOps state. The task asserts the vault values are present
+  and not the `.example` placeholders before it touches the cluster.
 - **root-app.yaml is rendered locally**, not fetched from
   `raw.githubusercontent.com`. That URL only resolves while the repository is
   public, so fetching it would leave the bootstrap depending on exactly the
-  visibility the deploy key exists to remove.
+  visibility the credential exists to remove.
+- The Secret carries **two** labels and needs both:
+  `argocd.argoproj.io/secret-type: repo-creds` marks it as a credential
+  template, and `app.kubernetes.io/part-of: argocd` is what makes Argo CD's
+  settings informer able to see it at all. Without the second, the Secret
+  exists as far as `kubectl` is concerned while Argo CD behaves as though there
+  is no credential.
+- A `repository` Secret whose `url` matches a repoURL **exactly** wins over a
+  `repo-creds` prefix match. The old deploy-key Secret (`homelab-infra-repo`)
+  has an `ssh` URL, so it does not shadow the https repoURLs — but do not
+  create an https `repository` Secret for homelab-infra alongside this one.
 
-The Secret carries **two** labels and needs both:
-`argocd.argoproj.io/secret-type: repository` marks it as a repository
-credential, and `app.kubernetes.io/part-of: argocd` is what makes Argo CD's
-settings informer able to see it at all. Without the second, the Secret exists
-as far as `kubectl` is concerned while Argo CD behaves as though there is no
-credential — an authentication failure that looks like a bad key rather than a
-missing label.
+One-time setup, after creating and installing the App:
 
-The key is **read-only on GitHub's side**, which matters: Argo CD only ever
-reads, and a writable key in the cluster would let anything able to read that
-Secret push to the repository defining the cluster. Losing it is recoverable —
-generate a new pair, replace the deploy key, re-run. Unlike the etcd encryption
-key, nothing is lost with it.
+```bash
+cp inventory/vault/argocd_github_app.yml.example inventory/vault/argocd_github_app.yml
+# fill in the App ID, installation ID and the downloaded .pem, then:
+ansible-vault encrypt inventory/vault/argocd_github_app.yml --vault-password-file .vault_pass.txt
+git add -f inventory/vault/argocd_github_app.yml
+```
+
+Runs of `main.yml` that reach the control-plane role then need
+`-e @inventory/vault/argocd_github_app.yml --vault-password-file .vault_pass.txt`.
+
+Losing the key is recoverable: generate a new one on the App's settings page,
+re-vault it, re-apply the Secret, then delete the old key on GitHub. Unlike the
+etcd encryption key, nothing is lost with it.
 
 ## MLX Inference Host (pi.dev)
 
