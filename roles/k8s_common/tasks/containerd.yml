@@ -6,6 +6,19 @@
     name: containerd
     state: present
 
+# Ubuntu 24.04's containerd package (2.2.1-0ubuntu1~24.04) ships no
+# /etc/containerd at all, so the `containerd config default >` redirect below
+# fails with "Directory nonexistent". The Debian and 26.04 packages create it.
+- name: Ensure the containerd config directory exists
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.file:
+    path: /etc/containerd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Check for existing containerd config
   ansible.builtin.stat:
     path: /etc/containerd/config.toml
