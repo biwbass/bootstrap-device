@@ -371,6 +371,40 @@ It goes through the same `main.yml` as the Pis, with four differences:
   degraded every time it sleeps. Run `longhorn-prereqs.yml` only after the node
   has joined: its labelling task fails on a node name the API has not seen.
 
+### Storage on the GPU worker
+
+The GPU worker **cannot mount Longhorn volumes**, and this is intended.
+`longhorn-manager`, `longhorn-csi-plugin` and the engine-image DaemonSets do
+not tolerate `dedicated=gpu`, so none of them run there, and no Longhorn Node
+exists for it. Leave it that way:
+
+- **Replicas** there would leave volumes degraded every time the node sleeps,
+  and Longhorn would rebuild them on every wake-up.
+- **Attaching** a volume there without replicas is also fragile. Every PV here
+  is RWO, and a Longhorn volume's engine runs on the node that uses it. If the
+  VM shuts down with a volume attached, the volume stays stuck to a node that
+  is gone until Kubernetes clears it, which takes minutes and sometimes a
+  manual step. Every shutdown would need a careful drain first.
+- **Speed.** Reads would cross the network to the Pis' SSDs. Pulling several
+  GB of model weights that way on every wake-up is slow.
+
+What to use instead:
+
+- **Model weights and caches** go on the VM's own disk, through a `hostPath`
+  or a local-path StorageClass. Shutting the VM down keeps that disk; only a
+  `qm rollback` wipes it, which is fine for a cache. The root filesystem is 61 GB today,
+  so grow it, or add a second disk for models, when the VM is sized for
+  inference.
+- **Data that matters** (results, fine-tunes) goes to something that stays
+  up, reached through a Service or object storage, not a volume mounted on
+  this node.
+
+**Watch for the default StorageClass.** `longhorn` is the cluster default,
+with `Immediate` binding. A chart scheduled onto the GPU worker that creates a
+PVC without naming a class gets a Longhorn volume, and its pod then sits in
+`ContainerCreating` because the volume cannot attach there. Always set
+`storageClassName` explicitly for GPU workloads.
+
 Pods that should run there need both a toleration and a selector. The taint
 only keeps other pods off; it does not attract these ones:
 
