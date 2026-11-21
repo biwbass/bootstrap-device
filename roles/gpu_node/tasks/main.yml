@@ -1,0 +1,15 @@
+---
+# Host side of the GPU worker (issue #60). Runs after k8s_common and
+# k8s_worker, so containerd and the kubelet already exist and the Node is
+# registered.
+- name: Mount the model weights disk
+  ansible.builtin.import_tasks: models_disk.yml
+
+- name: Install the NVIDIA driver
+  ansible.builtin.import_tasks: nvidia_driver.yml
+
+- name: Install the NVIDIA Container Toolkit and its containerd drop-in
+  ansible.builtin.import_tasks: container_toolkit.yml
+
+- name: Label the node as a GPU node
+  ansible.builtin.import_tasks: node_label.yml

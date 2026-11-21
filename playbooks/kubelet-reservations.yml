@@ -179,6 +179,8 @@
           {{ node_status.allocatable.cpu }} — the difference is now held back
           from the scheduler.
         quiet: true
+      # Reads the node fetched above, which --check skips.
+      when: not ansible_check_mode
 
   handlers:
     - name: Restart kubelet

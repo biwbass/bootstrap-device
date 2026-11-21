@@ -13,3 +13,35 @@
 # deleting and re-joining the node).
 kubelet_register_taints:
   - dedicated=gpu:NoSchedule
+
+# Kubelet reservations for the GPU worker (playbooks/kubelet-reservations.yml).
+# Replaces the cluster-wide values in all.yml, which are sized for ~8 GB nodes.
+#
+# Sized for 48 GB / 8 vCPU (issue #60). Most of the RAM is meant for one
+# inference server holding MoE expert weights outside VRAM, so the headroom
+# is larger than on the Pis. A model server that overruns should be evicted
+# by the kubelet, not picked by the kernel OOM killer, and eviction needs
+# slack to act in. 2.5 GB is held back from pods, plus 1 GB hard eviction
+# headroom.
+kubelet_reservations:
+  systemReserved:
+    cpu: 250m
+    memory: 1Gi
+    ephemeral-storage: 2Gi
+  kubeReserved:
+    cpu: 250m
+    memory: 1536Mi
+    ephemeral-storage: 2Gi
+  evictionHard:
+    memory.available: "1Gi"
+    nodefs.available: "10%"
+    imagefs.available: "15%"
+  evictionSoft:
+    memory.available: "2Gi"
+    nodefs.available: "15%"
+  evictionSoftGracePeriod:
+    memory.available: "2m"
+    nodefs.available: "2m"
+  evictionMaxPodGracePeriod: 60
+  enforceNodeAllocatable:
+    - pods

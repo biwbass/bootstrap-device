@@ -18,6 +18,9 @@
     executable: /bin/bash
   register: _kubelet_cert_subject
   changed_when: false
+  # Read-only. Skipped in --check, it left the name empty, and the diff then
+  # showed --hostname-override= with nothing after it.
+  check_mode: false
   failed_when: _kubelet_cert_subject.stdout | trim | length == 0
 
 - name: Set kubelet_cert_node_name

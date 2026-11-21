@@ -1,0 +1,59 @@
+---
+# Model weights live on their own virtual disk, not on /, so a full model
+# cache cannot starve the kubelet and containerd of space (README, "Storage on
+# the GPU worker"). Pods reach it through a hostPath or a local-path
+# StorageClass (homelab-infra#93).
+- name: Check for the model weights disk
+  ansible.builtin.stat:
+    path: "{{ gpu_node_models_disk }}"
+  register: gpu_node_models_disk_stat
+  when: gpu_node_models_disk | length > 0
+
+- name: Report a missing model weights disk
+  ansible.builtin.debug:
+    msg: >-
+      {{ gpu_node_models_disk }} does not exist, so {{ gpu_node_models_mount }}
+      is not mounted. Add the disk in Proxmox (qm set 201 --scsi1 ...) and
+      run this again.
+  when:
+    - gpu_node_models_disk | length > 0
+    - not gpu_node_models_disk_stat.stat.exists
+
+- name: Prepare and mount the model weights disk
+  when:
+    - gpu_node_models_disk | length > 0
+    - gpu_node_models_disk_stat.stat.exists
+  block:
+    # Without force, community.general.filesystem never reformats a device
+    # that already has a filesystem, so a second run (or a disk reattached
+    # from an earlier VM) keeps its contents.
+    - name: Create an ext4 filesystem on the model weights disk
+      become: true
+      become_method: ansible.builtin.sudo
+      community.general.filesystem:
+        dev: "{{ gpu_node_models_disk }}"
+        fstype: ext4
+        opts: -L models
+
+    # nofail: if the disk is ever detached, the VM still boots and joins.
+    # Model pods then fail on a missing path instead of the whole node
+    # dropping to an emergency shell.
+    - name: Mount the model weights disk
+      become: true
+      become_method: ansible.builtin.sudo
+      ansible.posix.mount:
+        path: "{{ gpu_node_models_mount }}"
+        src: "{{ gpu_node_models_disk }}"
+        fstype: ext4
+        opts: defaults,nofail,noatime
+        state: mounted
+
+    - name: Set the model weights directory permissions
+      become: true
+      become_method: ansible.builtin.sudo
+      ansible.builtin.file:
+        path: "{{ gpu_node_models_mount }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"

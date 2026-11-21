@@ -1,0 +1,155 @@
+---
+# The toolkit is installed and configured here, not by the GPU Operator
+# (toolkit.enabled=false, homelab-infra#93), so only Ansible ever writes
+# containerd's configuration, and each file has one writer:
+#
+#   /etc/containerd/config.toml            roles/k8s_common/tasks/containerd.yml
+#   /etc/containerd/conf.d/99-nvidia.toml  this file
+#
+# `nvidia-ctk runtime configure` and the operator's toolkit container would
+# each write the drop-in AND edit config.toml to add the imports line, which
+# k8s_common's regenerate-and-replace tasks would then fight on every run.
+- name: Fetch the NVIDIA Container Toolkit apt signing key once
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.get_url:
+    url: https://nvidia.github.io/libnvidia-container/gpgkey
+    dest: /tmp/nvidia-container-toolkit.key
+    mode: "0644"
+  register: gpu_node_toolkit_key_fetch
+  # Writes only to the controller's /tmp, and the copy below needs the file
+  # even in --check.
+  check_mode: false
+  until: gpu_node_toolkit_key_fetch is succeeded
+  retries: 5
+  delay: 15
+
+- name: Ensure apt keyrings directory exists
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install the NVIDIA Container Toolkit apt signing key
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.copy:
+    src: /tmp/nvidia-container-toolkit.key
+    dest: /etc/apt/keyrings/nvidia-container-toolkit.asc
+    mode: "0644"
+
+- name: Add the NVIDIA Container Toolkit apt repository
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.deb822_repository:
+    name: nvidia-container-toolkit
+    types: deb
+    # $(ARCH) is expanded by apt itself, as in NVIDIA's own .list file.
+    uris: https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH)
+    suites: /
+    signed_by: /etc/apt/keyrings/nvidia-container-toolkit.asc
+  register: gpu_node_toolkit_repo
+  notify: Update apt cache for the NVIDIA Container Toolkit
+
+- name: Apply pending apt cache update
+  ansible.builtin.meta: flush_handlers
+
+# In check mode on a host without the repo yet, apt has never seen these
+# packages and would fail, so the install is only simulated once the repo
+# exists.
+- name: Install the NVIDIA Container Toolkit (pinned)
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.apt:
+    name:
+      - "nvidia-container-toolkit={{ gpu_node_toolkit_version }}"
+      - "nvidia-container-toolkit-base={{ gpu_node_toolkit_version }}"
+      - "libnvidia-container-tools={{ gpu_node_toolkit_version }}"
+      - "libnvidia-container1={{ gpu_node_toolkit_version }}"
+    state: present
+  when: not (ansible_check_mode and gpu_node_toolkit_repo is changed)
+
+- name: Hold the NVIDIA Container Toolkit at the pinned version
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - nvidia-container-toolkit
+    - nvidia-container-toolkit-base
+    - libnvidia-container-tools
+    - libnvidia-container1
+  when: not (ansible_check_mode and gpu_node_toolkit_repo is changed)
+
+# The drop-in only takes effect if config.toml imports it. containerd 2.x's
+# `containerd config default` already emits that line, and k8s_common never
+# edits it, so this asserts instead of editing a file this role does not own.
+- name: Read containerd's main config
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.slurp:
+    src: /etc/containerd/config.toml
+  register: gpu_node_containerd_config
+
+- name: Assert containerd imports the conf.d drop-ins
+  ansible.builtin.assert:
+    that:
+      - >-
+        (gpu_node_containerd_config.content | b64decode)
+        is search("(?m)^imports\s*=\s*\[[^\]]*['\"]/etc/containerd/conf\.d/\*\.toml['\"]")
+    fail_msg: >-
+      /etc/containerd/config.toml has no imports entry for
+      /etc/containerd/conf.d/*.toml, so the NVIDIA runtime drop-in would be
+      ignored. Fix it in roles/k8s_common/tasks/containerd.yml (which owns that
+      file), not by hand.
+    quiet: true
+
+- name: Ensure the containerd drop-in directory exists
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.file:
+    path: /etc/containerd/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Add the NVIDIA runtime to containerd as a drop-in
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.template:
+    src: 99-nvidia.toml.j2
+    dest: /etc/containerd/conf.d/99-nvidia.toml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart containerd for the NVIDIA runtime
+
+- name: Apply the containerd change before checking it
+  ansible.builtin.meta: flush_handlers
+
+# Proves containerd merged the drop-in, rather than trusting the file is
+# there: a drop-in that fails to parse or merge is ignored with only a log
+# line.
+- name: Read containerd's merged configuration
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.command: containerd config dump
+  register: gpu_node_containerd_dump
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Assert containerd has the nvidia runtime
+  ansible.builtin.assert:
+    that:
+      - gpu_node_containerd_dump.stdout is search("runtimes\.nvidia\.options\]")
+      - gpu_node_containerd_dump.stdout is search("/usr/bin/nvidia-container-runtime")
+    fail_msg: >-
+      containerd's merged config has no nvidia runtime. Check
+      `journalctl -u containerd` for an error about
+      /etc/containerd/conf.d/99-nvidia.toml.
+    quiet: true
+  when: not ansible_check_mode
