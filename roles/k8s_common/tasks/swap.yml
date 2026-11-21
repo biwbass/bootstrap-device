@@ -1,6 +1,9 @@
 ---
-- name: Disable swap.img via fstab (Ubuntu Server control plane)
-  when: "'control_plane' in group_names"
+# Split by OS, not by role: the GPU worker is a worker but runs Ubuntu, so it
+# needs the swap.img handling (a no-op where there is no swap.img, as on a
+# cloud image) and has no Raspberry Pi OS zram unit to mask.
+- name: Disable swap.img via fstab (Ubuntu hosts)
+  when: "'raspberry_pi' not in group_names"
   become: true
   become_method: ansible.builtin.sudo
   block:
@@ -16,7 +19,7 @@
       when: ansible_swaptotal_mb | default(0) > 0
 
 - name: Disable zram swap (Raspberry Pi OS workers)
-  when: "'workers' in group_names"
+  when: "'raspberry_pi' in group_names"
   become: true
   become_method: ansible.builtin.sudo
   ansible.builtin.systemd:
