@@ -486,6 +486,31 @@ ansible-playbook main.yml -i inventory/hosts.yml --limit gpu --check --diff
 ansible-playbook main.yml -i inventory/hosts.yml --limit gpu
 ```
 
+### Sleep and wake on demand (design)
+
+Not built yet; today the VM is always on. The decision is in
+[docs/adr/0001-gpu-worker-sleep-wake.md](docs/adr/0001-gpu-worker-sleep-wake.md)
+(issue #61). In short:
+
+- **The inference server scales between 0 and 1.** KEDA and its HTTP add-on
+  do the scaling, and hold requests while it starts from cold.
+- **`gpu-power` controls the power.** It is a small controller that runs on
+  the Pis. It starts VM 201 through the Proxmox API when a GPU pod is Pending.
+  When the node is idle, it cordons and drains it, checks the result, then
+  calls the API's `shutdown`, never `stop`.
+- **Its Proxmox token is limited.** It has only `VM.PowerMgmt` and `VM.Audit`
+  on `/vms/201`, and is held in a SealedSecret.
+- **The Node is kept while the VM is off.** It stays cordoned and labelled
+  `power.homelab.internal/state=asleep`. Its DaemonSet pods stay bound to it,
+  shown as not ready.
+- **Alerts for planned sleep are handled at the source.** The sleeping node's
+  scrape targets are dropped, and three kube-state-metrics rules are replaced
+  with copies that skip an asleep node. There are no silences.
+
+Until it exists, assume nothing about the node staying up. For maintenance
+on the VM once it does, set the annotation `power.homelab.internal/hold=awake`
+on the Node first.
+
 ## Kubelet Resource Reservations
 
 The control plane global-OOM'd and the kernel killed `cilium-operator`:
@@ -1178,6 +1203,8 @@ pinned `vm_machine` afterwards.
 │   └── k8s_worker/                # kubeadm join
 ├── files/
 │   └── 45-allow-colord.pkla     # Polkit policy for Colord
+├── docs/
+│   └── adr/                      # design decisions (e.g. 0001: GPU worker sleep and wake)
 └── playbooks/
     ├── passwordless-sudo.yml      # One-time: grants NOPASSWD sudo so -K isn't needed on later runs
     ├── claude-readonly-access.yml # Read-only SSH user + view-only kubeconfig for Claude Code
