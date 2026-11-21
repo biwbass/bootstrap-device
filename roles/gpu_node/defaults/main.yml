@@ -1,0 +1,32 @@
+---
+# NVIDIA driver, installed on the host from Ubuntu's own archive (issue #60).
+#
+# Host-installed rather than the GPU Operator's driver container: the
+# operator would rebuild or load the driver inside a pod on every boot,
+# which slows down every wake of a node that is meant to sleep (#61). Its
+# support matrix also lists no GeForce cards. Install the operator with
+# driver.enabled=false and toolkit.enabled=false (homelab-infra#93).
+#
+# The -server branch is Ubuntu's long-lived build of the data-centre driver.
+# "-open" is NVIDIA's open kernel module, recommended for Turing and later
+# (the 3080 Ti is Ampere). DKMS rather than Ubuntu's precompiled
+# linux-modules-nvidia-*: those are rebuilt for each kernel against whatever
+# 580 point release is current, so with the userspace held below a kernel
+# upgrade would leave the new kernel with no matching module. DKMS builds the
+# held version against every new kernel. Secure Boot is off in this VM, so
+# unsigned DKMS modules load.
+#
+# Same rule as kubernetes_package_version: keep this equal to what is
+# installed, and check `apt-cache madison nvidia-utils-580-server` before
+# changing it.
+gpu_node_nvidia_branch: "580-server"
+gpu_node_nvidia_version: "580.178.04-0ubuntu0.24.04.1"
+
+# NVIDIA Container Toolkit, from NVIDIA's apt repo (not in Ubuntu's archive).
+gpu_node_toolkit_version: "1.20.2-1"
+
+# Second virtual disk for model weights and caches (README, "Storage on the
+# GPU worker"). Proxmox names a virtio-scsi disk after its slot, so this path
+# is stable across reboots. Empty disables the whole step.
+gpu_node_models_disk: /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi1
+gpu_node_models_mount: /var/lib/models

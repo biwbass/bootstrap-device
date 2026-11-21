@@ -64,6 +64,9 @@
   ansible.builtin.command: containerd config dump
   register: k8s_common_containerd_config_dump
   changed_when: false
+  # Read-only, so run it in --check too. Skipped, it registers empty stdout
+  # and the assert below fails every check run.
+  check_mode: false
 
 - name: Find any registry config_path containerd still has unset
   ansible.builtin.set_fact:

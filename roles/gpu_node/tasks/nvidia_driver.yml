@@ -1,0 +1,80 @@
+---
+# Pinned and held, as kubelet/kubeadm are, so unattended-upgrades never swaps
+# the userspace libraries out from under a loaded kernel module ("Failed to
+# initialize NVML: Driver/library version mismatch" until the next reboot).
+# See defaults/main.yml for why this is DKMS, -open and -server.
+#
+# Never get past the hold with --allow-change-held-packages or force: true.
+# Bump gpu_node_nvidia_version instead (inventory/group_vars/all.yml has
+# the same rule for Kubernetes).
+- name: Install the NVIDIA driver (pinned)
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.apt:
+    name:
+      # DKMS builds against the running kernel's headers, and the -virtual
+      # metapackage keeps headers in step with linux-image-virtual on every
+      # kernel upgrade.
+      - linux-headers-virtual
+      - "nvidia-headless-{{ gpu_node_nvidia_branch }}-open={{ gpu_node_nvidia_version }}"
+      - "nvidia-utils-{{ gpu_node_nvidia_branch }}={{ gpu_node_nvidia_version }}"
+    state: present
+    install_recommends: false
+  register: gpu_node_nvidia_install
+
+- name: Hold the NVIDIA driver at the pinned version
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - "nvidia-headless-{{ gpu_node_nvidia_branch }}-open"
+    - "nvidia-headless-no-dkms-{{ gpu_node_nvidia_branch }}-open"
+    - "nvidia-dkms-{{ gpu_node_nvidia_branch }}-open"
+    - "nvidia-kernel-source-{{ gpu_node_nvidia_branch }}-open"
+    - "nvidia-kernel-common-{{ gpu_node_nvidia_branch }}"
+    - "nvidia-utils-{{ gpu_node_nvidia_branch }}"
+    - "libnvidia-compute-{{ gpu_node_nvidia_branch }}"
+  # In check mode on a host without the driver, there is nothing to hold yet.
+  when: not (ansible_check_mode and gpu_node_nvidia_install is changed)
+
+# The driver installs whether or not a card is attached, but its module only
+# loads with one. Checked so this role also runs before passthrough.
+- name: Look for an NVIDIA PCI device
+  ansible.builtin.command: lspci -nn -d "10de:"
+  register: gpu_node_nvidia_pci
+  changed_when: false
+  check_mode: false
+
+- name: Load the NVIDIA kernel module and check the driver sees the card
+  when: gpu_node_nvidia_pci.stdout | length > 0
+  block:
+    # udev loads it at boot from the card's modalias; this covers the run
+    # that installs the driver, without a reboot.
+    - name: Load the NVIDIA kernel module
+      become: true
+      become_method: ansible.builtin.sudo
+      community.general.modprobe:
+        name: nvidia
+        state: present
+
+    - name: List GPUs with nvidia-smi
+      ansible.builtin.command: nvidia-smi -L
+      register: gpu_node_nvidia_smi
+      changed_when: false
+      # Nothing to run against in check mode before the driver is installed.
+      when: not ansible_check_mode
+
+    - name: Show the GPUs the driver found
+      ansible.builtin.debug:
+        msg: "{{ gpu_node_nvidia_smi.stdout_lines }}"
+      when: not ansible_check_mode
+
+- name: Report that no NVIDIA card is attached
+  ansible.builtin.debug:
+    msg: >-
+      No NVIDIA PCI device (vendor 10de) is visible, so the driver is
+      installed but not loaded. Attach the card with hostpci0 on the Proxmox
+      host (issue #60) and run this again.
+  when: gpu_node_nvidia_pci.stdout | length == 0

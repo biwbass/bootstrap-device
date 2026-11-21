@@ -1,0 +1,15 @@
+---
+# Set through the API, not with the kubelet's --node-labels: the
+# NodeRestriction admission plugin refuses node-role.kubernetes.io/* labels
+# set by a kubelet on its own Node. Delegated to the control plane for the
+# admin kubeconfig, as roles/k8s_worker does for its taint check.
+- name: Label the node node-role.kubernetes.io/gpu
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.command: >
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf label node
+    {{ k8s_node_name }} node-role.kubernetes.io/gpu= --overwrite
+  delegate_to: "{{ groups['control_plane'][0] }}"
+  register: gpu_node_label
+  # kubectl prints "node/<name> not labeled" when the label is already set.
+  changed_when: "'not labeled' not in gpu_node_label.stdout"

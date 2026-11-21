@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+#
+# The NVIDIA runtime, as a containerd 2.x drop-in. containerd's generated
+# config.toml (owned by roles/k8s_common/tasks/containerd.yml) already
+# carries imports = ['/etc/containerd/conf.d/*.toml'], so this file is merged
+# in without touching config.toml. Do not run `nvidia-ctk runtime configure`
+# here: it would also rewrite config.toml.
+#
+# Not the default runtime. GPU pods select it by RuntimeClass `nvidia`
+# (created by the GPU Operator), so Cilium and other system pods keep plain
+# runc.
+version = 3
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.nvidia]
+  runtime_type = 'io.containerd.runc.v2'
+  sandboxer = 'podsandbox'
+
+  [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.nvidia.options]
+    BinaryName = '/usr/bin/nvidia-container-runtime'
+    SystemdCgroup = true
