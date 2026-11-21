@@ -77,6 +77,13 @@
     # for any reason -- this playbook, a package upgrade, a reboot -- triggers
     # it. Set unconditionally, even where the hostname currently matches, so a
     # future hostname change cannot reintroduce it.
+    #
+    # --register-with-taints carries over what roles/k8s_worker wrote before
+    # the join (kubelet_register_taints, inventory/group_vars/gpu.yml). It only
+    # acts when a Node is first registered, but dropping it here would make the
+    # two writers of this file disagree, and a node deleted and re-registered
+    # would come back untainted. Kept out of the file's own comment so the file
+    # stays byte-identical on nodes without taints (no needless kubelet restart).
     - name: Pin the kubelet to the node name it was joined as
       become: true
       become_method: ansible.builtin.sudo
@@ -92,7 +99,8 @@
           # the CN of its client certificate. Without this it uses the system
           # hostname, and on a host renamed after joining the node authorizer
           # rejects it.
-          KUBELET_EXTRA_ARGS=--hostname-override={{ kubelet_reservations_node_name }}
+          {% set taints = kubelet_register_taints | default([]) %}
+          KUBELET_EXTRA_ARGS=--hostname-override={{ kubelet_reservations_node_name }}{{ (' --register-with-taints=' ~ taints | join(',')) if taints else '' }}
       notify: Restart kubelet
 
     - name: Install PyYAML for the config patcher

@@ -1,8 +1,53 @@
 ---
+# kubelet_register_taints (inventory/group_vars/gpu.yml) is shared with
+# playbooks/kubelet-reservations.yml, which writes the same file once the node
+# has joined, so it is an inventory variable rather than a k8s_worker_ one.
+# Unset means no taints.
 - name: Check if this node is already joined to the cluster
   ansible.builtin.stat:
     path: /etc/kubernetes/kubelet.conf
   register: k8s_worker_kubelet_conf
+
+# The kubelet registers under `uname -n`, and that name cannot be changed
+# afterwards without a re-join. When the inventory says what the name must be,
+# check it before joining rather than finding out from `kubectl get nodes`.
+- name: Assert the hostname is the intended node name before joining
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['nodename'] == k8s_node_name
+    fail_msg: >-
+      {{ inventory_hostname }} would register as '{{ ansible_facts['nodename'] }}',
+      but k8s_node_name is '{{ k8s_node_name }}'. Fix the hostname first: node
+      names cannot be changed after the join.
+    quiet: true
+  when:
+    - not k8s_worker_kubelet_conf.stat.exists
+    - k8s_node_name is defined
+
+# Written before the join, so the kubelet applies the taints in the very
+# request that creates the Node. Only on a node that has not joined yet: on a
+# joined node playbooks/kubelet-reservations.yml owns this file (and writes the
+# same taints alongside --hostname-override), and --register-with-taints would
+# have no effect there anyway.
+#
+# The kubeadm drop-in (10-kubeadm.conf) sources this file and passes
+# $KUBELET_EXTRA_ARGS to the kubelet, and kubeadm join restarts the kubelet,
+# so nothing here needs a restart of its own.
+- name: Set the taints the kubelet registers the node with
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.copy:
+    dest: /etc/default/kubelet
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Written by roles/k8s_worker before kubeadm join. Once the node has
+      # joined, playbooks/kubelet-reservations.yml takes this file over.
+      KUBELET_EXTRA_ARGS=--register-with-taints={{ kubelet_register_taints | join(',') }}
+  when:
+    - not k8s_worker_kubelet_conf.stat.exists
+    - kubelet_register_taints | default([]) | length > 0
 
 - name: Generate a fresh join command on the control plane
   ansible.builtin.command: kubeadm token create --print-join-command
@@ -21,3 +66,48 @@
   when: not k8s_worker_kubelet_conf.stat.exists
   changed_when: true
   no_log: true
+  register: k8s_worker_joined
+
+# Proves the taint was there from the start rather than trusting the flag. -o
+# json and parse in Ansible, for the same jsonpath-quoting reason given in
+# kubelet-reservations.yml. The Node object can take a few seconds to appear
+# after the join returns.
+- name: Read the newly registered node's taints
+  ansible.builtin.command: >
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf get node
+    {{ k8s_node_name | default(ansible_facts['nodename']) }} -o json
+  delegate_to: "{{ groups['control_plane'][0] }}"
+  become: true
+  become_method: ansible.builtin.sudo
+  register: k8s_worker_node
+  changed_when: false
+  until: k8s_worker_node.rc == 0
+  retries: 12
+  delay: 5
+  when:
+    - k8s_worker_joined is changed
+    - kubelet_register_taints | default([]) | length > 0
+
+# Rebuilt as key=value:effect strings, the same form kubelet_register_taints
+# uses, so the two lists compare directly.
+- name: Assert the node registered with its taints
+  vars:
+    k8s_worker_actual_taints: >-
+      {%- set out = [] -%}
+      {%- for t in (k8s_worker_node.stdout | from_json).spec.taints | default([]) -%}
+      {%- set _ = out.append(t.key ~ ('=' ~ t.value if t.value is defined else '') ~ ':' ~ t.effect) -%}
+      {%- endfor -%}
+      {{ out }}
+    k8s_worker_missing_taints: "{{ kubelet_register_taints | default([]) | difference(k8s_worker_actual_taints) }}"
+  ansible.builtin.assert:
+    that:
+      - k8s_worker_missing_taints | length == 0
+    fail_msg: >-
+      Node registered without {{ k8s_worker_missing_taints }} (it has
+      {{ k8s_worker_actual_taints }}). It is schedulable for pods that do not
+      tolerate them: cordon it now, then check /etc/default/kubelet and
+      `systemctl cat kubelet` on {{ inventory_hostname }}.
+    quiet: true
+  when:
+    - k8s_worker_joined is changed
+    - kubelet_register_taints | default([]) | length > 0

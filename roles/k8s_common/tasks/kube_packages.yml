@@ -138,8 +138,19 @@
   become: true
   become_method: ansible.builtin.sudo
   ansible.builtin.command: apt-mark manual cri-tools kubernetes-cni
+  # C locale so the wording matched below is stable.
+  environment:
+    LC_ALL: C
   register: k8s_common_apt_mark_manual
-  changed_when: "' set to manually installed' in k8s_common_apt_mark_manual.stdout"
+  # apt-mark prints "<pkg> set to manually installed." when it changes a mark
+  # and "<pkg> was already set to manually installed." when it does not. The
+  # second also contains the first, so a plain substring test reported changed
+  # on every run, on every node.
+  changed_when: >-
+    k8s_common_apt_mark_manual.stdout_lines
+    | select('search', ' set to manually installed')
+    | reject('search', 'already set to manually installed')
+    | list | length > 0
 
 - name: Hold kubelet, kubeadm, and kubectl at the pinned version
   become: true

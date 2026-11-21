@@ -28,8 +28,19 @@ kubernetes_version: "v{{ kubernetes_package_version.split('-')[0] }}"
 longhorn_storage_nodes:
   - gpio.k8s.internal
   - ml.k8s.internal
+#
+# The GPU worker is kept out of storage for a different reason: it is meant to
+# sleep and wake on demand, and every replica on it would leave its volume
+# degraded whenever it sleeps.
+#
+# Every name in both lists must already be a joined node: the labelling tasks
+# in longhorn-prereqs.yml run `kubectl label node`, which fails on a name the
+# API server has never seen. A node in neither list gets no label, which
+# Longhorn treats the same as `false` (createDefaultDiskLabeledNodes only
+# creates disks on nodes labelled true). The list exists to make that explicit.
 longhorn_non_storage_nodes:
   - control-plane.k8s.internal
+  - gpu.k8s.internal
 
 # Kubelet resource reservations (see playbooks/kubelet-reservations.yml).
 #

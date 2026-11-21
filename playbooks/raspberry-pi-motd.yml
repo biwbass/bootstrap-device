@@ -1,5 +1,5 @@
 - name: Raspberry-Pi MOTD
-  hosts: workers
+  hosts: raspberry_pi
 
   tasks:
     - name: Copy MOTD

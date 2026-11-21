@@ -8,6 +8,7 @@ This project bootstraps a kubeadm-based Kubernetes cluster across a control-plan
 
 ## Features
 
+- **GPU worker**: an amd64 Ubuntu 24.04 Proxmox VM joined as a worker that is tainted from the moment it registers — see [GPU Worker](#gpu-worker)
 - **Kubernetes cluster bootstrap**: kubeadm-based control plane (kube-vip for a stable VIP endpoint, Cilium as the CNI, ArgoCD as the GitOps controller for everything else) and worker nodes, via the `k8s_common`/`k8s_control_plane`/`k8s_worker` roles
 - **Custom MOTD**: Distinct message-of-the-day for Raspberry Pi workers and the control-plane VM
 - **xRDP Remote Desktop**: Remote desktop access with SSL certificate configuration (workers)
@@ -340,6 +341,58 @@ The node labels drive Longhorn's `createDefaultDiskLabeledNodes` setting. Nodes
 that should not hold data are labelled `false` rather than left unlabelled —
 both behave the same today, but the explicit value makes the intent legible to
 whoever later wonders why the control plane has no disk.
+
+## GPU Worker
+
+`gpu-worker` (`gpu.k8s.internal`, Proxmox VM 201, Ryzen 5800X with a 3080 Ti
+to be passed through later) is the cluster's first **amd64** node and its
+first worker that is not a Pi. It runs Ubuntu 24.04 rather than 26.04
+because the NVIDIA GPU Operator support matrix does not list 26.04 yet.
+Tracked in issue #57.
+
+It goes through the same `main.yml` as the Pis, with four differences:
+
+- **Tainted at registration.** `kubelet_register_taints` in
+  `inventory/group_vars/gpu.yml` (`dedicated=gpu:NoSchedule`) is written to
+  `/etc/default/kubelet` as `--register-with-taints` by `k8s_worker` *before*
+  `kubeadm join`. The Node therefore never exists untainted. Running
+  `kubectl taint` after the join would leave a window in which arm64-only
+  images could be scheduled there and fail with `exec format error`. The role
+  then reads the Node back and fails if the taint is missing.
+  `kubelet-reservations.yml` writes the same flag alongside
+  `--hostname-override`, so the two writers of that file never disagree.
+- **Name checked before the join.** `k8s_node_name` in
+  `inventory/host_vars/gpu-worker.yml` must equal the VM's hostname, or the
+  join is refused. Node names cannot be changed after a join.
+- **No Pi-only plays.** The Pi MOTD and xRDP/colord now target the
+  `raspberry_pi` group instead of `workers`.
+- **No Longhorn storage.** It is listed in `longhorn_non_storage_nodes`
+  because it is meant to sleep on demand, and replicas there would leave volumes
+  degraded every time it sleeps. Run `longhorn-prereqs.yml` only after the node
+  has joined: its labelling task fails on a node name the API has not seen.
+
+Pods that should run there need both a toleration and a selector. The taint
+only keeps other pods off; it does not attract these ones:
+
+```yaml
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: gpu
+    effect: NoSchedule
+nodeSelector:
+  kubernetes.io/arch: amd64
+```
+
+Bring-up, from a clean snapshot:
+
+```bash
+ansible-playbook main.yml -i inventory/hosts.yml --limit gpu --check --diff
+```
+
+```bash
+ansible-playbook main.yml -i inventory/hosts.yml --limit gpu
+```
 
 ## Kubelet Resource Reservations
 
@@ -844,11 +897,11 @@ To add a verb, add it to `vm_ctl_verbs`, give it a branch in
 
 ### System Setup
 - Git version control system
-- Colord user permissions for graphical applications (workers)
+- Colord user permissions for graphical applications (Raspberry Pi workers)
 
 ### Remote Access
-- xRDP server for remote desktop connections (workers)
-- User added to ssl-cert group for certificate access (workers)
+- xRDP server for remote desktop connections (Raspberry Pi workers)
+- User added to ssl-cert group for certificate access (Raspberry Pi workers)
 
 ### Development Environment
 - Oh-My-ZSH shell framework (control plane + workers)
@@ -873,7 +926,7 @@ To add a verb, add it to `vm_ctl_verbs`, give it a branch in
 ├── main.yml                      # Main playbook orchestrating all configurations
 ├── requirements.yml              # Ansible collection dependencies
 ├── inventory/
-│   ├── hosts.yml                 # control_plane / workers / ml / inference groups
+│   ├── hosts.yml                 # control_plane / workers (raspberry_pi, gpu) / ml / inference groups
 │   ├── group_vars/               # cluster-wide + per-group version pins, VIP, CIDR
 │   ├── host_vars/                # per-worker vars (e.g. ML workload labeling)
 │   └── vault/                    # ansible-vault-encrypted secrets, passed explicitly (not auto-loaded; gitignored by default, encrypted files committed with git add -f)
@@ -886,7 +939,7 @@ To add a verb, add it to `vm_ctl_verbs`, give it a branch in
 └── playbooks/
     ├── passwordless-sudo.yml      # One-time: grants NOPASSWD sudo so -K isn't needed on later runs
     ├── claude-readonly-access.yml # Read-only SSH user + view-only kubeconfig for Claude Code
-    ├── raspberry-pi-motd.yml     # Worker MOTD
+    ├── raspberry-pi-motd.yml     # Raspberry Pi worker MOTD
     ├── control-plane-motd.yml    # Control-plane MOTD
     ├── oh-my-zsh.yml            # ZSH shell setup
     ├── machine-learning.yml      # ML tools and libraries
