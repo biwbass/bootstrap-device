@@ -2,7 +2,7 @@
 
 Ansible bootstrap for a homelab kubeadm cluster. See `README.md` for what
 each playbook does. The GitOps side (Argo CD apps) is in
-`jordanthomas761/homelab-infra`.
+`biwbass/homelab-infra`.
 
 ## This repo is public
 

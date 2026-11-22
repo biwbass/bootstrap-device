@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-11-21
 - **Issue:** #61 (follows #57; host side in #60; cluster side in
-  jordanthomas761/homelab-infra#93)
+  biwbass/homelab-infra#93)
 
 ## Context
 
@@ -436,11 +436,11 @@ They are still fine for a person doing manual maintenance.
 1. #65: create the Proxmox role, user and token, check that the cluster can
    reach the Proxmox API on port 8006, and enable kubelet graceful node
    shutdown on the `gpu` group.
-2. jordanthomas761/homelab-infra#94: KEDA and the HTTP add-on as Argo CD
+2. biwbass/homelab-infra#94: KEDA and the HTTP add-on as Argo CD
    apps, plus an `InterceptorRoute` and ScaledObject for the inference
    Deployment.
-3. jordanthomas761/homelab-infra#95: the `gpu-power` controller: code,
+3. biwbass/homelab-infra#95: the `gpu-power` controller: code,
    multi-arch image, Deployment, RBAC, and the SealedSecret.
-4. jordanthomas761/homelab-infra#96: the alerting changes in section 5.
+4. biwbass/homelab-infra#96: the alerting changes in section 5.
 5. #66: measure the cold start end to end, and set the readiness timeout and
    `cooldownPeriod` from the numbers.
