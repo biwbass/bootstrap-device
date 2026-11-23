@@ -30,3 +30,11 @@ gpu_node_toolkit_version: "1.20.2-1"
 # is stable across reboots. Empty disables the whole step.
 gpu_node_models_disk: /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi1
 gpu_node_models_mount: /var/lib/models
+
+# Board power limit applied to every NVIDIA GPU on each boot by
+# gpu-power-limit.service (README, "GPU power limit"). The 3080 Ti allows
+# 100-450 W and defaults to 400 W. Token generation is memory-bandwidth bound
+# and peaked at 212 W in a 78K-token benchmark, so 280 W costs little or no
+# throughput, and it leaves PSU headroom for the second card planned for this
+# VM. Must be inside every card's reported min/max limit, or the role fails.
+gpu_node_power_limit_watts: 280

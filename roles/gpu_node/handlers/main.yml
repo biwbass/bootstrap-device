@@ -13,3 +13,20 @@
   ansible.builtin.systemd_service:
     name: containerd
     state: restarted
+
+- name: Reload systemd for the GPU power limit
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Re-runs the oneshot with the new script or wattage. Changing the limit on a
+# running card is safe: it takes effect at once, without a reboot, and
+# running workloads keep running.
+- name: Apply the GPU power limit
+  become: true
+  become_method: ansible.builtin.sudo
+  ansible.builtin.systemd_service:
+    name: gpu-power-limit.service
+    state: restarted
+  when: not ansible_check_mode

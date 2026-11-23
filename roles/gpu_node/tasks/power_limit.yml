@@ -1,0 +1,118 @@
+---
+# Persistence mode and a board power limit on every NVIDIA GPU, reapplied on
+# each boot by a oneshot unit (README, "GPU power limit"). The limit is not
+# persistent in the driver, and this VM sleeps and wakes (ADR 0001).
+- name: Check the GPU power limit is a whole number of watts
+  ansible.builtin.assert:
+    that:
+      - gpu_node_power_limit_watts | string is match("^[0-9]+$")
+      - gpu_node_power_limit_watts | int > 0
+    fail_msg: >-
+      gpu_node_power_limit_watts must be a whole number of watts, not
+      {{ gpu_node_power_limit_watts }}.
+    quiet: true
+
+- name: Apply the GPU power limit
+  when: gpu_node_nvidia_pci.stdout | length > 0
+  block:
+    - name: Read each GPU's power limit range
+      ansible.builtin.command: >-
+        nvidia-smi --query-gpu=index,power.min_limit,power.max_limit
+        --format=csv,noheader,nounits
+      register: gpu_node_power_range
+      changed_when: false
+      # Nothing to run against in check mode before the driver is installed.
+      when: not ansible_check_mode
+
+    # Fails before anything is written, rather than at the next boot.
+    - name: Check the power limit is inside every GPU's range
+      ansible.builtin.assert:
+        that:
+          - (item.split(',')[1] | trim | float) <= (gpu_node_power_limit_watts | int)
+          - (gpu_node_power_limit_watts | int) <= (item.split(',')[2] | trim | float)
+        fail_msg: >-
+          gpu_node_power_limit_watts={{ gpu_node_power_limit_watts }} is outside
+          GPU {{ item.split(',')[0] }}'s range of
+          {{ item.split(',')[1] | trim }}-{{ item.split(',')[2] | trim }} W.
+        quiet: true
+      loop: "{{ gpu_node_power_range.stdout_lines }}"
+      when: not ansible_check_mode
+
+    # Shipped by nvidia-compute-utils, which the headless driver pulls in.
+    # Checked rather than assumed, so the role does not depend on how the
+    # driver packages are split.
+    - name: Look for the packaged nvidia-persistenced unit
+      ansible.builtin.stat:
+        path: /lib/systemd/system/nvidia-persistenced.service
+      register: gpu_node_persistenced_unit
+
+    - name: Enable the NVIDIA persistence daemon
+      become: true
+      become_method: ansible.builtin.sudo
+      ansible.builtin.systemd_service:
+        name: nvidia-persistenced.service
+        enabled: true
+        state: started
+      when: gpu_node_persistenced_unit.stat.exists
+
+    - name: Install the GPU power limit script
+      become: true
+      become_method: ansible.builtin.sudo
+      ansible.builtin.template:
+        src: gpu-power-limit.sh.j2
+        dest: /usr/local/sbin/gpu-power-limit
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Apply the GPU power limit
+
+    - name: Install the GPU power limit unit
+      become: true
+      become_method: ansible.builtin.sudo
+      ansible.builtin.template:
+        src: gpu-power-limit.service.j2
+        dest: /etc/systemd/system/gpu-power-limit.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: gpu_node_power_unit
+      notify:
+        - Reload systemd for the GPU power limit
+        - Apply the GPU power limit
+
+    - name: Reload systemd before enabling the GPU power limit
+      ansible.builtin.meta: flush_handlers
+
+    # state: started on a RemainAfterExit oneshot runs it once and is then
+    # idempotent; the handler re-runs it when the script or unit changes.
+    - name: Enable the GPU power limit at boot
+      become: true
+      become_method: ansible.builtin.sudo
+      ansible.builtin.systemd_service:
+        name: gpu-power-limit.service
+        enabled: true
+        state: started
+      # In check mode on a first run, systemd has never seen the unit.
+      when: not (ansible_check_mode and gpu_node_power_unit is changed)
+
+    - name: Read each GPU's power limit and persistence mode
+      ansible.builtin.command: >-
+        nvidia-smi --query-gpu=index,power.limit,persistence_mode
+        --format=csv,noheader,nounits
+      register: gpu_node_power_state
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Assert every GPU has the power limit and persistence mode
+      ansible.builtin.assert:
+        that:
+          - (item.split(',')[1] | trim | float) == (gpu_node_power_limit_watts | float)
+          - item.split(',')[2] | trim == 'Enabled'
+        fail_msg: >-
+          GPU {{ item.split(',')[0] }} reports a power limit of
+          {{ item.split(',')[1] | trim }} W and persistence mode
+          {{ item.split(',')[2] | trim }}. Check
+          `journalctl -u gpu-power-limit.service`.
+        quiet: true
+      loop: "{{ gpu_node_power_state.stdout_lines }}"
+      when: not ansible_check_mode
