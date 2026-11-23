@@ -452,6 +452,8 @@ function (`0c:00.1` `10de:1aef`) are alone in IOMMU group 29.
   is current, so with the userspace held, a kernel upgrade would leave no
   matching module.
 - NVIDIA Container Toolkit `1.20.2-1` from NVIDIA's repo, held.
+- Persistence mode and a 280 W power limit on every GPU, reapplied on each
+  boot. See [GPU power limit](#gpu-power-limit).
 - **containerd has one writer per file.** `k8s_common` owns
   `/etc/containerd/config.toml`. The NVIDIA runtime lives in
   `/etc/containerd/conf.d/99-nvidia.toml`, which containerd 2.x's generated
@@ -484,6 +486,68 @@ ansible-playbook main.yml -i inventory/hosts.yml --limit gpu --check --diff
 
 ```bash
 ansible-playbook main.yml -i inventory/hosts.yml --limit gpu
+```
+
+### GPU power limit
+
+`roles/gpu_node` caps every NVIDIA GPU in the VM at
+`gpu_node_power_limit_watts` (default **280 W**, in
+`roles/gpu_node/defaults/main.yml`) and turns on persistence mode.
+
+**Why 280 W.** The 3080 Ti allows 100–450 W and ships at 400 W. Measured in
+November 2026 with llama-server serving Qwen3.6-35B-A3B, a 78K-token benchmark
+peaked at 212 W and averaged 39 W, at 65 °C at most; idle is about 23 W.
+Token generation is bound by memory bandwidth, not by the cores, so 280 W
+sits well above the measured peak and costs little or no throughput. The
+real reason is the second 3080 Ti planned for this VM: two cards at 400 W,
+plus their transient spikes, could trip the PSU (homelab-infra#97 also has
+checking PSU headroom before that card goes in).
+
+**How it is applied.** `nvidia-smi -pl` is lost on every reboot and driver
+reload, and this VM is meant to power off when idle and boot on demand
+([ADR 0001](docs/adr/0001-gpu-worker-sleep-wake.md)). So the role installs a
+oneshot unit, `gpu-power-limit.service`, that runs on every boot after the
+`nvidia` module loads and before the kubelet:
+
+1. It enables the packaged `nvidia-persistenced` daemon, when the driver
+   ships one. Because Ubuntu's unit can start the daemon with
+   `--no-persistence-mode`, the script then checks each card and falls back
+   to `nvidia-smi -pm 1` where persistence is still off.
+2. For **every GPU `nvidia-smi` lists**, it reads the card's min and max
+   limit and runs `nvidia-smi -i <n> -pl <watts>`. A second card is covered
+   without any change here. A card whose range does not contain the limit is
+   left alone, and the unit fails, so the problem shows in
+   `systemctl --failed`.
+
+The role checks the same range before writing anything, restarts the unit
+when the script or the wattage changes (safe on a running card, no reboot
+needed), and asserts that every card reports the limit and `Enabled`. The
+unit is ordered before the kubelet but not required by it, so a failed cap
+does not take the node out of the cluster.
+
+To change the limit, set `gpu_node_power_limit_watts` (for example in
+`inventory/group_vars/gpu.yml`) and run the role:
+
+```bash
+ansible-playbook main.yml -i inventory/hosts.yml --limit gpu --check --diff
+```
+
+```bash
+ansible-playbook main.yml -i inventory/hosts.yml --limit gpu
+```
+
+Check from the VM:
+
+```bash
+nvidia-smi -q -d POWER | grep -E 'Current Power Limit|Persistence'
+```
+
+```bash
+nvidia-smi --query-gpu=index,power.limit,persistence_mode --format=csv
+```
+
+```bash
+systemctl status gpu-power-limit.service
 ```
 
 ### Sleep and wake on demand (design)

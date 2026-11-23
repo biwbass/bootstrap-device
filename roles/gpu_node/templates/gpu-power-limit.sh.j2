@@ -1,0 +1,60 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# Run by gpu-power-limit.service on every boot. Enables persistence mode and
+# sets the power limit to $GPU_POWER_LIMIT_WATTS on every GPU nvidia-smi
+# lists, so a second card needs no change here. A limit outside a card's
+# reported range is refused for that card, and the unit fails.
+set -euo pipefail
+
+watts="${GPU_POWER_LIMIT_WATTS:?GPU_POWER_LIMIT_WATTS is not set}"
+[[ "$watts" =~ ^[0-9]+$ ]] || { echo "GPU_POWER_LIMIT_WATTS=$watts is not a whole number" >&2; exit 1; }
+
+# The driver can take a moment to answer right after the module loads.
+for _ in $(seq 1 15); do
+  nvidia-smi -L >/dev/null 2>&1 && break
+  sleep 1
+done
+
+gpus=()
+while read -r i; do
+  gpus+=("$i")
+done < <(nvidia-smi --query-gpu=index --format=csv,noheader)
+if [ "${#gpus[@]}" -eq 0 ]; then
+  echo "nvidia-smi lists no GPUs" >&2
+  exit 1
+fi
+
+# nvidia-persistenced normally holds the devices open. Ubuntu's packaged unit
+# may start it with --no-persistence-mode, so check the flag on each card and
+# fall back to the (deprecated) driver flag where it is still off. Without
+# persistence the driver can tear down and re-initialise the card between
+# clients, losing the limit set below.
+for i in "${gpus[@]}"; do
+  pm=$(nvidia-smi -i "$i" --query-gpu=persistence_mode --format=csv,noheader)
+  if [ "$pm" != "Enabled" ]; then
+    echo "GPU $i: persistence mode is $pm, enabling it with nvidia-smi -pm 1"
+    nvidia-smi -i "$i" -pm 1
+  fi
+done
+
+rc=0
+for i in "${gpus[@]}"; do
+  IFS=, read -r min max < <(nvidia-smi -i "$i" \
+    --query-gpu=power.min_limit,power.max_limit --format=csv,noheader,nounits)
+  min=${min// /}; max=${max// /}
+  min=${min%.*}; max=${max%.*}
+  if ! [[ "$min" =~ ^[0-9]+$ && "$max" =~ ^[0-9]+$ ]]; then
+    echo "GPU $i: no power limit range reported (min=$min max=$max), not setting it" >&2
+    rc=1
+    continue
+  fi
+  if [ "$watts" -lt "$min" ] || [ "$watts" -gt "$max" ]; then
+    echo "GPU $i: $watts W is outside its range of $min-$max W, not setting it" >&2
+    rc=1
+    continue
+  fi
+  nvidia-smi -i "$i" -pl "$watts"
+done
+
+exit "$rc"

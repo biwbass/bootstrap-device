@@ -21,8 +21,9 @@
   roles:
     - k8s_worker
 
-# Host side of the GPU worker: driver, NVIDIA Container Toolkit (as a
-# containerd drop-in), model weights disk and node-role label. Issue #60.
+# Host side of the GPU worker: driver, GPU power limit, NVIDIA Container
+# Toolkit (as a containerd drop-in), model weights disk and node-role label.
+# Issue #60.
 - name: Prepare GPU workers for inference
   hosts: gpu
   roles:

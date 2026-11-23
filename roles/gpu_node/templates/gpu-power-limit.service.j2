@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+#
+# Persistence mode and a board power limit for every NVIDIA GPU, applied on
+# each boot. `nvidia-smi -pl` does not survive a reboot or a driver reload,
+# and this VM powers off when idle and boots on demand (ADR 0001), so a
+# one-time setting would be lost on the first sleep. Installed by
+# roles/gpu_node/tasks/power_limit.yml.
+[Unit]
+Description=NVIDIA GPU persistence mode and power limit
+# Wants, not Requires: if the packaged daemon is missing or fails, the script
+# falls back to `nvidia-smi -pm 1`.
+Wants=nvidia-persistenced.service
+After=nvidia-persistenced.service systemd-modules-load.service
+# Set before any GPU pod can start. Not RequiredBy kubelet: a failed cap
+# should be visible in the journal, not take the whole node out.
+Before=kubelet.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=GPU_POWER_LIMIT_WATTS={{ gpu_node_power_limit_watts }}
+# udev normally loads the module from the card's modalias before this runs.
+ExecStartPre=/usr/sbin/modprobe nvidia
+ExecStart=/usr/local/sbin/gpu-power-limit
+
+[Install]
+WantedBy=multi-user.target
